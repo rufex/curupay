@@ -5,6 +5,7 @@ const os = require("os");
 const mappings = JSON.parse(fs.readFileSync("./mappings.json", "utf-8"));
 const openAccounts: string[] = [];
 const generatedTxs: string[] = [];
+const processedTxIds = new Set<string>();
 
 const COL_WIDTH = 80;
 const CURRENCY = "EUR";
@@ -121,6 +122,13 @@ async function processTransactions(actualData: ActualData) {
   validateMappings(actualData);
 
   for (const transaction of actualData.transactions) {
+    if (processedTxIds.has(transaction.id)) {
+      console.debug(
+        `Transaction ${transaction.id} has already been processed. Skipping.`,
+      );
+      continue;
+    }
+
     // Split transaction
     if (
       transaction.is_parent == true &&
@@ -248,16 +256,17 @@ function processSplitTransactions(
     const subNote =
       subTx.notes != "" && subTx.notes != null ? ` ; ${subTx.notes}` : "";
 
-    // Expense
+    const amount = (-subTx.amount / 100).toFixed(2);
+    let destName;
+
     if (subTx.category) {
+      // Expense
       const mappedCategoryName = identifyMappedCategory(subTx, actualData);
       if (!mappedCategoryName) return;
-      openAccount(mappedCategoryName, subTx.date);
 
-      const amount = (-subTx.amount / 100).toFixed(2);
-      lines += `  ${mappedCategoryName.padEnd(COL_WIDTH)} ${amount} ${CURRENCY}${subNote}\n`;
-      // Transfer
+      destName = mappedCategoryName;
     } else if (subTx.transfer_id) {
+      // Transfer
       const matchingTx = identifyRelatedTransaction(subTx, actualData);
       if (!matchingTx) return;
 
@@ -266,28 +275,35 @@ function processSplitTransactions(
         actualData,
       );
       if (!mappedTransferAccountName) return;
-      openAccount(mappedTransferAccountName, subTx.date);
 
-      const amount = (subTx.amount / 100).toFixed(2);
-      lines += `  ${mappedTransferAccountName.padEnd(COL_WIDTH)} ${amount} ${CURRENCY}${subNote}\n`;
+      destName = mappedTransferAccountName;
     } else {
       console.warn(
         `SubTx ${subTx.id} is missing both category and transfer_id. Skipping.`,
       );
+      return;
     }
+
+    openAccount(destName, subTx.date);
+    lines += `  ${destName.padEnd(COL_WIDTH)} ${amount} ${CURRENCY}${subNote}\n`;
   }
 
-  if (lines) {
-    const info = `${transaction.date} txn "${mainPayeeName}"`;
-    const mainAmount = (transaction.amount / 100).toFixed(2);
-    const mainLine = `  ${mainAccountName.padEnd(COL_WIDTH)} ${mainAmount} ${CURRENCY}${mainNote}\n`;
-    const tx = `\n${comment}\n${info}\n${mainLine}${lines}`;
-    generatedTxs.push(tx);
-  } else {
+  if (!lines) {
     console.warn(
       `Split transaction ${transaction.id} has no valid subtransactions. Skipping.`,
     );
+    return;
   }
+
+  const info = `${transaction.date} txn "${mainPayeeName}"`;
+  const mainAmount = (transaction.amount / 100).toFixed(2);
+  const mainLine = `  ${mainAccountName.padEnd(COL_WIDTH)} ${mainAmount} ${CURRENCY}${mainNote}\n`;
+  const tx = `\n${comment}\n${info}\n${mainLine}${lines}`;
+
+  processedTxIds.add(transaction.id);
+  transaction.subtransactions.forEach((subTx) => processedTxIds.add(subTx.id));
+
+  generatedTxs.push(tx);
 }
 
 function processExpense(transaction: Transaction, actualData: ActualData) {
@@ -309,6 +325,8 @@ function processExpense(transaction: Transaction, actualData: ActualData) {
   const line1 = `  ${mappedAccountName.padEnd(COL_WIDTH)}  ${accountAmount} ${CURRENCY}`;
   const line2 = `  ${mappedCategoryName.padEnd(COL_WIDTH)} ${categoryAmount} ${CURRENCY}`;
   const tx = `\n${comment}\n${info}\n${line1}\n${line2}\n`;
+
+  processedTxIds.add(transaction.id);
 
   generatedTxs.push(tx);
 }
@@ -339,10 +357,8 @@ function processTransfer(transaction: Transaction, actualData: ActualData) {
   const line2 = `  ${mappedTransferAccountName.padEnd(COL_WIDTH)} ${amountB} ${CURRENCY}`;
   const tx = `\n${comment}\n${info}\n${line1}\n${line2}\n`;
 
-  // remove related transaction from transactions so we don't process it again
-  actualData.transactions = actualData.transactions.filter(
-    (t: Transaction) => t.id !== matchingTx.id,
-  );
+  processedTxIds.add(transaction.id);
+  processedTxIds.add(matchingTx.id);
 
   generatedTxs.push(tx);
 }
