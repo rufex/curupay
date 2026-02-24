@@ -16,6 +16,7 @@ fs.mkdirSync(dataDirPath, { recursive: true });
 type Account = {
   id: string;
   name: string;
+  closed: boolean;
 };
 
 type Category = {
@@ -69,6 +70,8 @@ type ActualData = {
   const actualData: ActualData = await fetchActualData();
 
   await processTransactions(actualData);
+
+  await closeAccounts(actualData.accounts);
 
   await generateBalances(actualData.accounts);
 
@@ -410,6 +413,27 @@ async function generateBalances(accounts: Account[]) {
 
     const comment = `; actual-account-id:${account.id}`;
     const info = `${today} balance ${mappedAccountName.padEnd(COL_WIDTH)} ${balanceAmount} ${CURRENCY}`;
+    const tx = `\n${comment}\n${info}\n`;
+
+    generatedTxs.push(tx);
+  }
+}
+
+async function closeAccounts(accounts: Account[]) {
+  for (const account of accounts) {
+    if (account.closed == false) continue;
+
+    const mappedAccountName = mappings["accounts"][account.name] || undefined;
+    if (!mappedAccountName) {
+      console.warn(
+        `Account ${account.name} has no mapped account name. Skipping account closing.`,
+      );
+      continue;
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    const comment = `; actual-account-id:${account.id}`;
+    const info = `${today} close ${mappedAccountName}`;
     const tx = `\n${comment}\n${info}\n`;
 
     generatedTxs.push(tx);
